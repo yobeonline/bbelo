@@ -2,16 +2,22 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
+	elo "github.com/kortemy/elo-go"
 )
 
 type UserRanks map[string][]int
+
+var mutex sync.Mutex
 
 func readKeyFile(path string) UserRanks {
 	file, err := os.Open(path)
@@ -141,7 +147,62 @@ func deletePlayer(w http.ResponseWriter, r *http.Request) {
 }
 
 func postGame(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
+	defer func() {
+		if r := recover(); r != nil {
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}()
+
+	vars := mux.Vars(r)
+	path := vars["key"]
+
+	key_file := readKeyFile(path)
+
+	elo_sys := elo.NewElo()
+	score := 0.5
+	wname := ""
+	lname := ""
+
+	if r.URL.Query().Has("winner") {
+		if !r.URL.Query().Has("loser") {
+			panic("No loser")
+		}
+
+		wname = r.URL.Query().Get("winner")
+		lname = r.URL.Query().Get("loser")
+		score = 1.0
+
+	} else if r.URL.Query().Has("draw") {
+		players := strings.Split(r.URL.Query().Get("draw"), ",")
+		if 2 != len(players) {
+			panic("there must be two players")
+		}
+
+		wname = players[0]
+		lname = players[1]
+		score = 0.5
+	} else {
+		panic("missing arguments")
+	}
+
+	if _, ok := key_file[wname]; !ok {
+		panic("unknown user")
+	}
+	if _, ok := key_file[lname]; !ok {
+		panic("unknown user")
+	}
+
+	wrank := key_file[wname][len(key_file[wname])-1]
+	lrank := key_file[lname][len(key_file[lname])-1]
+
+	woutcome, loutcome := elo_sys.Outcome(wrank, lrank, score)
+
+	key_file[wname] = append(key_file[wname], woutcome.Rating)
+	key_file[lname] = append(key_file[lname], loutcome.Rating)
+
+	writeKeyFile(path, key_file)
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "%s: %d\n%s: %d\n", wname, woutcome.Delta, lname, loutcome.Delta)
 }
 
 func getRanks(w http.ResponseWriter, r *http.Request) {
