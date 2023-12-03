@@ -17,18 +17,62 @@ import (
 
 type UserRanks map[string][]int
 
+func getCurrentRank(ranks []int) int {
+	return ranks[len(ranks)-1]
+}
+
 var io_mutex sync.RWMutex
+
+type RuntimeError struct {
+	Code    int
+	Message string
+	Log     string
+}
+
+const DefaultRank int = 400
+
+func catch(w http.ResponseWriter) {
+
+	if r := recover(); r != nil {
+
+		w.Header().Set("Content-Type", "application/json")
+
+		error := struct {
+			What string `json:"error"`
+		}{}
+
+		if rt, ok := r.(RuntimeError); ok {
+			w.WriteHeader(rt.Code)
+			error.What = rt.Message
+			log.Fatalln(rt.Log)
+		} else {
+			error.What = fmt.Sprintf("%v", r)
+			w.WriteHeader(http.StatusBadRequest)
+			log.Fatalln(error.What)
+		}
+
+		json.NewEncoder(w).Encode(error)
+	}
+}
 
 func readKeyFile(path string) UserRanks {
 	file, err := os.Open(path)
 	if err != nil {
-		log.Fatal(err)
+		panic(RuntimeError{
+			Code:    http.StatusNotFound,
+			Message: fmt.Sprintf(`key is invalid: "%s"`, path),
+			Log:     fmt.Sprintf(`[ERROR] readKeyFile::Open "%s" failed: %v`, path, err),
+		})
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		log.Fatal(err)
+		panic(RuntimeError{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf(`key is corrupted: "%s"`, path),
+			Log:     fmt.Sprintf(`[ERROR] readKeyFile::ReadAll "%s" failed: %v`, path, err),
+		})
 	}
 
 	if 0 == len(data) {
@@ -38,7 +82,11 @@ func readKeyFile(path string) UserRanks {
 	var users map[string][]int
 	err = json.Unmarshal(data, &users)
 	if err != nil {
-		log.Fatal(err)
+		panic(RuntimeError{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf(`key is corrupted: "%s"`, path),
+			Log:     fmt.Sprintf(`[ERROR] readKeyFile::Unmarshal "%s" failed: %v`, path, err),
+		})
 	}
 
 	return users
@@ -47,18 +95,30 @@ func readKeyFile(path string) UserRanks {
 func writeKeyFile(path string, users UserRanks) {
 	file, err := os.Create(path)
 	if err != nil {
-		log.Fatal(err)
+		panic(RuntimeError{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf(`key is corrupted: "%s"`, path),
+			Log:     fmt.Sprintf(`[ERROR] writeKeyFile::Create "%s" failed: %v`, path, err),
+		})
 	}
 	defer file.Close()
 
 	data, err := json.MarshalIndent(users, "", "  ")
 	if err != nil {
-		log.Fatal(err)
+		panic(RuntimeError{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf(`key is corrupted: "%s"`, path),
+			Log:     fmt.Sprintf(`[ERROR] writeKeyFile::MarshalIndent "%s" failed: %v`, path, err),
+		})
 	}
 
 	_, err = file.Write(data)
 	if err != nil {
-		log.Fatal(err)
+		panic(RuntimeError{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf(`key is corrupted: "%s"`, path),
+			Log:     fmt.Sprintf(`[ERROR] writeKeyFile::Write "%s" failed: %v`, path, err),
+		})
 	}
 }
 
@@ -68,13 +128,15 @@ func postPlayer(w http.ResponseWriter, r *http.Request) {
 		io_mutex.Unlock()
 	}()
 
+	defer catch(w)
+
 	vars := mux.Vars(r)
 	path := vars["key"]
 	name := vars["name"]
 
 	key_file := readKeyFile(path)
 	if _, ok := key_file[name]; !ok {
-		key_file[name] = []int{400}
+		key_file[name] = []int{DefaultRank}
 		writeKeyFile(path, key_file)
 		w.WriteHeader(http.StatusCreated)
 	} else {
@@ -88,12 +150,14 @@ func getPlayerRank(w http.ResponseWriter, r *http.Request) {
 		io_mutex.RUnlock()
 	}()
 
+	defer catch(w)
+
 	vars := mux.Vars(r)
 	path := vars["key"]
 	name := vars["name"]
 
 	key_file := readKeyFile(path)
-	if _, ok := key_file[name]; !ok {
+	if ranks, ok := key_file[name]; !ok {
 		w.WriteHeader(http.StatusNotFound)
 	} else {
 		w.Header().Set("Content-Type", "application/json")
@@ -104,7 +168,7 @@ func getPlayerRank(w http.ResponseWriter, r *http.Request) {
 			Rank int    `json:"rank"`
 		}{
 			User: name,
-			Rank: key_file[name][len(key_file[name])-1],
+			Rank: getCurrentRank(ranks),
 		}
 
 		err := json.NewEncoder(w).Encode(data)
@@ -120,12 +184,14 @@ func getPlayerHistory(w http.ResponseWriter, r *http.Request) {
 		io_mutex.RUnlock()
 	}()
 
+	defer catch(w)
+
 	vars := mux.Vars(r)
 	path := vars["key"]
 	name := vars["name"]
 
 	key_file := readKeyFile(path)
-	if _, ok := key_file[name]; !ok {
+	if ranks, ok := key_file[name]; !ok {
 		w.WriteHeader(http.StatusNotFound)
 	} else {
 		w.Header().Set("Content-Type", "application/json")
@@ -136,7 +202,7 @@ func getPlayerHistory(w http.ResponseWriter, r *http.Request) {
 			Ranks []int  `json:"ranks"`
 		}{
 			User:  name,
-			Ranks: key_file[name],
+			Ranks: ranks,
 		}
 
 		err := json.NewEncoder(w).Encode(data)
@@ -151,6 +217,8 @@ func deletePlayer(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		io_mutex.Unlock()
 	}()
+
+	defer catch(w)
 
 	vars := mux.Vars(r)
 	path := vars["key"]
@@ -172,11 +240,7 @@ func postGame(w http.ResponseWriter, r *http.Request) {
 		io_mutex.Unlock()
 	}()
 
-	defer func() {
-		if r := recover(); r != nil {
-			w.WriteHeader(http.StatusBadRequest)
-		}
-	}()
+	defer catch(w)
 
 	vars := mux.Vars(r)
 	path := vars["key"]
@@ -210,20 +274,20 @@ func postGame(w http.ResponseWriter, r *http.Request) {
 		panic("missing arguments")
 	}
 
-	if _, ok := key_file[wname]; !ok {
+	if wranks, ok := key_file[wname]; !ok {
 		panic("unknown user")
 	}
-	if _, ok := key_file[lname]; !ok {
+	if lranks, ok := key_file[lname]; !ok {
 		panic("unknown user")
 	}
 
-	wrank := key_file[wname][len(key_file[wname])-1]
-	lrank := key_file[lname][len(key_file[lname])-1]
+	wrank := getCurrentRank(wranks)
+	lrank := getCurrentRank(lranks)
 
 	woutcome, loutcome := elo_sys.Outcome(wrank, lrank, score)
 
-	key_file[wname] = append(key_file[wname], woutcome.Rating)
-	key_file[lname] = append(key_file[lname], loutcome.Rating)
+	wranks = append(wranks, woutcome.Rating)
+	lranks = append(lranks, loutcome.Rating)
 
 	writeKeyFile(path, key_file)
 	w.WriteHeader(http.StatusOK)
@@ -235,6 +299,8 @@ func getRanks(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		io_mutex.RUnlock()
 	}()
+
+	defer catch(w)
 
 	vars := mux.Vars(r)
 	path := vars["key"]
@@ -254,7 +320,7 @@ func getRanks(w http.ResponseWriter, r *http.Request) {
 	}{}
 
 	for key, ranks := range key_file {
-		data.Ranks = append(data.Ranks, Entry{User: key, Rank: ranks[len(ranks)-1]})
+		data.Ranks = append(data.Ranks, Entry{User: key, Rank: getCurrentRank(ranks)})
 	}
 
 	err := json.NewEncoder(w).Encode(data)
