@@ -17,7 +17,7 @@ import (
 
 type UserRanks map[string][]int
 
-var mutex sync.Mutex
+var io_mutex sync.RWMutex
 
 func readKeyFile(path string) UserRanks {
 	file, err := os.Open(path)
@@ -63,6 +63,11 @@ func writeKeyFile(path string, users UserRanks) {
 }
 
 func postPlayer(w http.ResponseWriter, r *http.Request) {
+	io_mutex.Lock()
+	defer func() {
+		io_mutex.Unlock()
+	}()
+
 	vars := mux.Vars(r)
 	path := vars["key"]
 	name := vars["name"]
@@ -78,6 +83,11 @@ func postPlayer(w http.ResponseWriter, r *http.Request) {
 }
 
 func getPlayerRank(w http.ResponseWriter, r *http.Request) {
+	io_mutex.RLock()
+	defer func() {
+		io_mutex.RUnlock()
+	}()
+
 	vars := mux.Vars(r)
 	path := vars["key"]
 	name := vars["name"]
@@ -105,6 +115,11 @@ func getPlayerRank(w http.ResponseWriter, r *http.Request) {
 }
 
 func getPlayerHistory(w http.ResponseWriter, r *http.Request) {
+	io_mutex.RLock()
+	defer func() {
+		io_mutex.RUnlock()
+	}()
+
 	vars := mux.Vars(r)
 	path := vars["key"]
 	name := vars["name"]
@@ -132,6 +147,11 @@ func getPlayerHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func deletePlayer(w http.ResponseWriter, r *http.Request) {
+	io_mutex.Lock()
+	defer func() {
+		io_mutex.Unlock()
+	}()
+
 	vars := mux.Vars(r)
 	path := vars["key"]
 	name := vars["name"]
@@ -147,6 +167,11 @@ func deletePlayer(w http.ResponseWriter, r *http.Request) {
 }
 
 func postGame(w http.ResponseWriter, r *http.Request) {
+	io_mutex.Lock()
+	defer func() {
+		io_mutex.Unlock()
+	}()
+
 	defer func() {
 		if r := recover(); r != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -206,6 +231,11 @@ func postGame(w http.ResponseWriter, r *http.Request) {
 }
 
 func getRanks(w http.ResponseWriter, r *http.Request) {
+	io_mutex.RLock()
+	defer func() {
+		io_mutex.RUnlock()
+	}()
+
 	vars := mux.Vars(r)
 	path := vars["key"]
 
