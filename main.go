@@ -173,7 +173,11 @@ func getPlayerRank(w http.ResponseWriter, r *http.Request) {
 
 		err := json.NewEncoder(w).Encode(data)
 		if err != nil {
-			log.Fatal(err)
+			panic(RuntimeError{
+				Code:    http.StatusInternalServerError,
+				Message: `json encoding failed`,
+				Log:     fmt.Sprintf(`[ERROR] getPlayerRank::Marshal failed: %v`, err),
+			})
 		}
 	}
 }
@@ -207,7 +211,11 @@ func getPlayerHistory(w http.ResponseWriter, r *http.Request) {
 
 		err := json.NewEncoder(w).Encode(data)
 		if err != nil {
-			log.Fatal(err)
+			panic(RuntimeError{
+				Code:    http.StatusInternalServerError,
+				Message: `json encoding failed`,
+				Log:     fmt.Sprintf(`[ERROR] getPlayerHistory::Marshal failed: %v`, err),
+			})
 		}
 	}
 }
@@ -254,7 +262,7 @@ func postGame(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Query().Has("winner") {
 		if !r.URL.Query().Has("loser") {
-			panic("No loser")
+			panic("missing argument: loser=<name>.")
 		}
 
 		wname = r.URL.Query().Get("winner")
@@ -264,21 +272,24 @@ func postGame(w http.ResponseWriter, r *http.Request) {
 	} else if r.URL.Query().Has("draw") {
 		players := strings.Split(r.URL.Query().Get("draw"), ",")
 		if 2 != len(players) {
-			panic("there must be two players")
+			panic("draw requires two names: draw=<name>,<name>.")
 		}
 
 		wname = players[0]
 		lname = players[1]
 		score = 0.5
 	} else {
-		panic("missing arguments")
+		panic("provide either: ?draw=<name>,<name> or ?winner=<name>&loser=<name>.")
 	}
 
-	if wranks, ok := key_file[wname]; !ok {
-		panic("unknown user")
+	wranks, ok := key_file[wname]
+	if !ok {
+		panic(RuntimeError{Message: fmt.Sprintf("unknown user: %s", wname), Code: http.StatusNotFound, Log: fmt.Sprintf(`[ERROR] postGame::wname user "%s" not found.`, wname)})
 	}
-	if lranks, ok := key_file[lname]; !ok {
-		panic("unknown user")
+
+	lranks, ok := key_file[lname]
+	if !ok {
+		panic(RuntimeError{Message: fmt.Sprintf("unknown user: %s", lname), Code: http.StatusNotFound, Log: fmt.Sprintf(`[ERROR] postGame::wname user "%s" not found.`, lname)})
 	}
 
 	wrank := getCurrentRank(wranks)
@@ -290,8 +301,27 @@ func postGame(w http.ResponseWriter, r *http.Request) {
 	lranks = append(lranks, loutcome.Rating)
 
 	writeKeyFile(path, key_file)
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "%s: %d\n%s: %d\n", wname, woutcome.Delta, lname, loutcome.Delta)
+
+	result := []struct {
+		User  string `json:"user"`
+		Rank  int    `json:"rank"`
+		Delta int    `json:"delta"`
+	}{
+		{User: wname, Rank: woutcome.Rating, Delta: woutcome.Delta},
+		{User: lname, Rank: loutcome.Rating, Delta: loutcome.Delta},
+	}
+
+	err := json.NewEncoder(w).Encode(result)
+	if err != nil {
+		panic(RuntimeError{
+			Code:    http.StatusInternalServerError,
+			Message: `json encoding failed`,
+			Log:     fmt.Sprintf(`[ERROR] postGame::Marshal failed: %v`, err),
+		})
+	}
 }
 
 func getRanks(w http.ResponseWriter, r *http.Request) {
@@ -325,7 +355,11 @@ func getRanks(w http.ResponseWriter, r *http.Request) {
 
 	err := json.NewEncoder(w).Encode(data)
 	if err != nil {
-		log.Fatal(err)
+		panic(RuntimeError{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf(`key is corrupted: "%s"`, path),
+			Log:     fmt.Sprintf(`[ERROR] getRanks::Marshal "%s" failed: %v`, path, err),
+		})
 	}
 }
 
@@ -335,7 +369,7 @@ func main() {
 	r.HandleFunc("/{key}/player/{name}/rank", getPlayerRank).Methods("GET")
 	r.HandleFunc("/{key}/player/{name}/history", getPlayerHistory).Methods("GET")
 	r.HandleFunc("/{key}/player/{name}", deletePlayer).Methods("DELETE")
-	r.HandleFunc("/{key}/game", postGame).Methods("POST")
+	r.HandleFunc("/{key}/game", postGame).Methods("POST") // ?winner=<name>&loser=<name> or ?draw=<name>,<name>
 	r.HandleFunc("/{key}/ranks", getRanks).Methods("GET")
 
 	srv := &http.Server{
