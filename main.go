@@ -363,6 +363,10 @@ func getRanks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func getHealth(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
 func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/{key}/player/{name}", postPlayer).Methods("POST")
@@ -371,6 +375,7 @@ func main() {
 	r.HandleFunc("/{key}/player/{name}", deletePlayer).Methods("DELETE")
 	r.HandleFunc("/{key}/game", postGame).Methods("POST") // ?winner=<name>&loser=<name> or ?draw=<name>,<name>
 	r.HandleFunc("/{key}/ranks", getRanks).Methods("GET")
+	r.HandleFunc("/health", getHealth).Methods("GET")
 
 	srv := &http.Server{
 		Handler:      r,
