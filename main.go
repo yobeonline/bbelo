@@ -368,6 +368,8 @@ func getHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	log.Printf("Version: %s", Semver)
+
 	r := mux.NewRouter()
 	r.HandleFunc("/{key}/player/{name}", postPlayer).Methods("POST")
 	r.HandleFunc("/{key}/player/{name}/rank", getPlayerRank).Methods("GET")
